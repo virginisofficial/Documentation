@@ -1,0 +1,122 @@
+#SONARQUBE installation
+---
+
+#Requirements
+yum update -y
+yum install java-17-openjdk java-17-openjdk-devel
+yum install unzip software-properties-common wget
+ 
+
+#PostgreSQL 
+#Installation
+yum install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-9-x86_64/pgdg-redhat-repo-latest.noarch.rpm  
+yum -qy module disable postgresql  
+yum install -y postgresql15-server  
+sudo /usr/pgsql-15/bin/postgresql-15-setup initdb  
+systemctl enable postgresql-15  
+systemctl start postgresql-15
+#Create DB / user / schema
+sudo -u postgres psql
+CREATE USER sonarqube WITH PASSWORD 'sonarqube';
+CREATE DATABASE sonarqube OWNER sonarqube;
+GRANT ALL PRIVILEGES ON DATABASE sonarqube TO sonarqube;
+\l
+\du
+\q
+#Service
+systemctl status  postgresql-15
+ 
+
+#SonarQube
+
+#Add 
+nano /etc/sysctl.conf
+```
+vm.max_map_count=524288
+fs.file-max=131072
+```
+sudo sysctl --system
+ulimit -n 131072
+ulimit -u 8192
+
+# Add 
+nano /etc/security/limits.d/99-sonarqube.conf
+```
+sonarqube   -   nofile   131072
+sonarqube   -   nproc    8192
+```
+
+#Download Sonarqube.zip
+wget https://binaries.sonarsource.com/Dist...
+unzip sonarqube-*.*.*.*.zip
+mv sonarqube-*.*.* /opt/sonarqube
+#User to start SonarQube
+useradd -b /opt/sonarqube -s /bin/bash sonarqube
+chown -R sonarqube:sonarqube /opt/sonarqube
+#SonarQube config add
+nano /opt/sonarqube/conf/sonar.properties
+```
+sonar.jdbc.username=sonarqube
+sonar.jdbc.password=sonarqube
+sonar.jdbc.url=jdbc:postgresql://localhost:5432/sonarqube
+sonar.web.javaOpts=-Xmx512m -Xms128m -XX:+HeapDumpOnOutOfMemoryError
+sonar.web.javaAdditionalOpts=-server
+sonar.web.host=192.168.200.224 ( If using nginx use 127.0.0.1)
+sonar.web.port=9000
+sonar.log.level=INFO
+sonar.path.logs=logs
+```
+
+#Create service
+nano /etc/systemd/system/sonarqube.service
+```
+[Unit]
+Description=SonarQube service
+After=syslog.target network.target
+[Service]
+Type=forking
+ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start
+ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop
+User=sonarqube
+Group=sonarqube
+Restart=always
+LimitNOFILE=65536
+LimitNPROC=4096
+[Install]
+WantedBy=multi-user.target
+```
+systemctl daemon-reload
+systemctl start sonarqube.service
+systemctl enable sonarqube.service
+#Service
+systemctl status sonarqube.service
+ 
+
+#Nginx
+
+yum install nginx
+systemctl enabled nginx
+systemctl status nginx
+#Add to nginx config
+nano /etc/nginx/nginx.conf
+```
+erver {
+    listen 80;
+    server_name domain.com;
+    access_log /var/log/nginx/sonar.access.log;
+    error_log /var/log/nginx/sonar.error.log;
+    proxy_buffers 16 64k;
+    proxy_buffer_size 128k;
+    location / {
+        proxy_pass http://127.0.0.1:9000;
+        proxy_next_upstream error timeout invalid_header http_500 http_502 http_503 http_504;
+        proxy_redirect off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+    }
+}
+```
+nginx -t
+systemctl restart nginx
